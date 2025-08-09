@@ -1,11 +1,10 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity, FlatList, Image, RefreshControl, Platform } from 'react-native';
-import { Heart, MessageCircle, Share, Camera } from 'lucide-react-native';
+import { Heart, MessageCircle, Share } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useAppContext } from '@/context/AppContext';
 import { getRarityColor, getRarityLabel } from '@/utils/rarityUtils';
 import * as Haptics from 'expo-haptics';
-import { LinearGradient } from 'expo-linear-gradient';
 
 interface FeedPost {
   id: string;
@@ -34,92 +33,31 @@ export default function FeedScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [likedPosts, setLikedPosts] = useState<Set<string>>(new Set());
 
-  // Generate mock social feed data from discoveries
-  const generateFeedPosts = (): FeedPost[] => {
-    const mockUsers = [
-      { name: 'Sarah Chen', avatar: 'https://images.unsplash.com/photo-1494790108755-2616b612b786?q=80&w=200&auto=format&fit=crop' },
-      { name: 'Mike Johnson', avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?q=80&w=200&auto=format&fit=crop' },
-      { name: 'Emma Wilson', avatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?q=80&w=200&auto=format&fit=crop' },
-      { name: 'Alex Rivera', avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?q=80&w=200&auto=format&fit=crop' },
-    ];
+  // Build feed purely from the user's own discoveries
+  const feedPosts = useMemo<FeedPost[]>(() => {
+    const posts = discoveries.map((discovery) => ({
+      id: `own-${discovery.id}`,
+      user: {
+        name: user.name,
+        avatar: user.profilePicture || 'https://images.unsplash.com/photo-1535083783855-76ae62b2914e?q=80&w=200&auto=format&fit=crop',
+      },
+      discovery: {
+        id: discovery.id,
+        name: discovery.name,
+        scientificName: discovery.scientificName,
+        imageUri: discovery.imageUri,
+        rarity: discovery.rarity,
+        discoveredAt: discovery.discoveredAt,
+      },
+      likes: 0,
+      comments: 0,
+      isLiked: false,
+    }));
 
-    const captions = [
-      'Amazing encounter in the wild! 🦅',
-      'Nature never ceases to amaze me ✨',
-      'Found this beauty during my morning hike 🌿',
-      'Wildlife photography at its finest 📸',
-      'Conservation is so important for these species 🌍',
-      'What an incredible discovery! 🔥',
-    ];
-
-    const locations = [
-      'Yellowstone National Park',
-      'Amazon Rainforest',
-      'Serengeti Plains',
-      'Great Barrier Reef',
-      'Rocky Mountains',
-      'Costa Rica',
-    ];
-
-    const allPosts: FeedPost[] = [];
-
-    // Add user's own discoveries
-    discoveries.slice(0, 3).forEach((discovery, index) => {
-      allPosts.push({
-        id: `own-${discovery.id}`,
-        user: {
-          name: user.name,
-          avatar: user.profilePicture || 'https://images.unsplash.com/photo-1535083783855-76ae62b2914e?q=80&w=200&auto=format&fit=crop',
-        },
-        discovery: {
-          id: discovery.id,
-          name: discovery.name,
-          scientificName: discovery.scientificName,
-          imageUri: discovery.imageUri,
-          rarity: discovery.rarity,
-          discoveredAt: discovery.discoveredAt,
-          location: locations[index % locations.length],
-        },
-        likes: Math.floor(Math.random() * 50) + 5,
-        comments: Math.floor(Math.random() * 20) + 1,
-        isLiked: Math.random() > 0.5,
-        caption: captions[index % captions.length],
-      });
-    });
-
-    // Add mock friend discoveries
-    for (let i = 0; i < 8; i++) {
-      const mockUser = mockUsers[i % mockUsers.length];
-      const mockDiscovery = discoveries[i % Math.max(discoveries.length, 1)] || {
-        id: `mock-${i}`,
-        name: 'Red Fox',
-        scientificName: 'Vulpes vulpes',
-        imageUri: 'https://images.unsplash.com/photo-1474511320723-9a56873867b5?q=80&w=400&auto=format&fit=crop',
-        rarity: 'uncommon',
-        discoveredAt: new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000).toISOString(),
-      };
-
-      allPosts.push({
-        id: `friend-${i}`,
-        user: mockUser,
-        discovery: {
-          ...mockDiscovery,
-          id: `mock-${i}`,
-          location: locations[i % locations.length],
-        },
-        likes: Math.floor(Math.random() * 100) + 10,
-        comments: Math.floor(Math.random() * 30) + 2,
-        isLiked: Math.random() > 0.6,
-        caption: captions[i % captions.length],
-      });
-    }
-
-    return allPosts.sort((a, b) => 
+    return posts.sort((a, b) =>
       new Date(b.discovery.discoveredAt).getTime() - new Date(a.discovery.discoveredAt).getTime()
     );
-  };
-
-  const [feedPosts] = useState<FeedPost[]>(generateFeedPosts());
+  }, [discoveries, user]);
 
   const handleLike = (postId: string) => {
     if (Platform.OS !== 'web') {
@@ -140,9 +78,7 @@ export default function FeedScreen() {
     router.push(`/identification/${discoveryId}`);
   };
 
-  const handleCameraPress = () => {
-    router.push('/modal');
-  };
+  // Camera entry handled elsewhere (tabs)
 
   const onRefresh = () => {
     setRefreshing(true);
