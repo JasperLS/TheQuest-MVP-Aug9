@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { StyleSheet, View, Text, Image, TouchableOpacity, ScrollView, Alert, Platform, TextInput, FlatList, Modal } from 'react-native';
 import { useAppContext } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
+import { supabase } from '@/lib/supabase';
 import { Camera, Edit2, LogOut, Medal, Settings, Share2, Search, Filter, MoreHorizontal, MessageSquare, Info, X } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
@@ -11,7 +12,7 @@ import { getRarityColor, getRarityLabel } from '@/utils/rarityUtils';
 
 export default function ProfileScreen() {
   const { user, updateUserProfile, resetAppData, discoveries } = useAppContext();
-  const { signOut } = useAuth();
+  const { signOut, user: authUser } = useAuth();
   const router = useRouter();
   const [isEditing, setIsEditing] = useState(false);
   const [editedName, setEditedName] = useState(user.name);
@@ -37,11 +38,33 @@ export default function ProfileScreen() {
     }
   };
 
-  const handleSaveProfile = () => {
-    updateUserProfile({ name: editedName });
-    setIsEditing(false);
-    if (Platform.OS !== 'web') {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  const handleSaveProfile = async () => {
+    const newName = editedName.trim();
+    if (!newName) {
+      return Alert.alert('Invalid name', 'Please enter a valid display name.');
+    }
+
+    try {
+      if (!authUser?.id) {
+        throw new Error('Not authenticated');
+      }
+
+      const { error } = await supabase
+        .from('profiles')
+        .update({ display_name: newName })
+        .eq('id', authUser.id);
+
+      if (error) throw error;
+
+      // Keep local UI in sync
+      updateUserProfile({ name: newName });
+      setIsEditing(false);
+      if (Platform.OS !== 'web') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
+    } catch (err: any) {
+      console.error('Failed to update display name:', err);
+      Alert.alert('Error', err?.message || 'Failed to update your name.');
     }
   };
 
