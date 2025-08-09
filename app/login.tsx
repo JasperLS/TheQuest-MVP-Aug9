@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { useAuth } from '@/context/AuthContext';
 import { Mail, Lock, Eye, EyeOff } from 'lucide-react-native';
+import { useRouter } from 'expo-router';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState<string>('');
@@ -21,7 +22,15 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState<boolean>(false);
   const [showPassword, setShowPassword] = useState<boolean>(false);
   
-  const { signIn, signUp } = useAuth();
+  const { signIn, signUp, user } = useAuth();
+  const router = useRouter();
+
+  // If already authenticated, redirect to the app
+  useEffect(() => {
+    if (user) {
+      router.replace('/');
+    }
+  }, [user, router]);
 
   const handleAuth = async () => {
     if (!email || !password) {
@@ -49,6 +58,8 @@ export default function LoginScreen() {
         } else {
           Alert.alert('Success', 'Signed in successfully!');
         }
+        // Navigate to the main app
+        router.replace('/');
       }
     } catch (err) {
       console.error('Unexpected auth error:', err);
