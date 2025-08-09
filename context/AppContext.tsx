@@ -384,6 +384,62 @@ export const [AppContext, useAppContext] = createContextHook(() => {
     }
   };
 
+  function edgeRarityToLabel(rarity: number | string | undefined): 'common' | 'uncommon' | 'rare' | 'legendary' {
+    if (typeof rarity === 'string') {
+      const r = rarity.toLowerCase();
+      if (r === 'common' || r === 'uncommon' || r === 'rare' || r === 'legendary') return r;
+      // best-effort mapping from text
+      if (r.includes('legend')) return 'legendary';
+      if (r.includes('rare')) return 'rare';
+      if (r.includes('uncommon') || r.includes('un-usual')) return 'uncommon';
+      return 'common';
+    }
+    // numeric mapping fallback
+    const n = Number(rarity ?? 1);
+    if (n >= 4) return 'legendary';
+    if (n >= 3) return 'rare';
+    if (n >= 2) return 'uncommon';
+    return 'common';
+  }
+
+  // Add a discovery from an Edge Function result into local profile
+  const addDiscoveryFromEdgeResult = (result: EdgeIdentificationResult) => {
+    try {
+      const rarityLabel = edgeRarityToLabel(result?.identified?.rarity);
+      const funFacts = Array.isArray(result?.identified?.fun_facts) ? result.identified.fun_facts : [];
+
+      const discovery: Discovery = {
+        id: result.post_id || result.animal_id || Date.now().toString(),
+        imageUri: result.image_url,
+        name: result.identified?.species || 'Unknown species',
+        scientificName: result.identified?.species || 'Unknown',
+        description: funFacts.length > 0 ? funFacts.join(' ') : 'Identified via AI',
+        category: result.identified?.class || 'Unknown',
+        habitat: result.identified?.kingdom || 'Unknown habitat',
+        rarity: rarityLabel,
+        funFacts,
+        points: calculatePoints(rarityLabel),
+        discoveredAt: new Date().toISOString(),
+        isFavorite: false,
+      };
+
+      setDiscoveries(prev => [discovery, ...prev]);
+
+      // Add points to user similar to mock flow
+      setUser(prev => {
+        const newPoints = prev.points + discovery.points;
+        const newLevel = Math.floor(newPoints / 100) + 1;
+        let newRank = 'Beginner';
+        if (newPoints >= 1000) newRank = 'Expert';
+        else if (newPoints >= 500) newRank = 'Advanced';
+        else if (newPoints >= 200) newRank = 'Intermediate';
+        return { ...prev, points: newPoints, level: newLevel, rank: newRank };
+      });
+    } catch (error) {
+      console.error('Failed to add discovery from edge result:', error);
+    }
+  };
+
   // Calculate points based on rarity
   const calculatePoints = (rarity: string): number => {
     switch (rarity) {
@@ -476,6 +532,7 @@ export const [AppContext, useAppContext] = createContextHook(() => {
     isLoading,
     lastIdentificationResult,
     setLastIdentificationResult,
+    addDiscoveryFromEdgeResult,
     identifyAnimal,
     addToFavorites,
     claimAchievementReward,

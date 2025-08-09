@@ -7,7 +7,7 @@ import { MapPin, Save } from 'lucide-react-native';
 export default function IdentificationResultScreen() {
   const { source } = useLocalSearchParams<{ source?: string }>();
   const router = useRouter();
-  const { lastIdentificationResult } = useAppContext();
+  const { lastIdentificationResult, addDiscoveryFromEdgeResult } = useAppContext();
 
   if (!lastIdentificationResult) {
     return (
@@ -23,6 +23,9 @@ export default function IdentificationResultScreen() {
   const { image_url, identified } = lastIdentificationResult;
 
   const handleSave = () => {
+    if (lastIdentificationResult) {
+      addDiscoveryFromEdgeResult(lastIdentificationResult);
+    }
     Alert.alert('Saved', 'Your discovery has been saved!', [
       { text: 'OK', onPress: () => router.replace('/') },
     ]);
