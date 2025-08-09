@@ -5,6 +5,22 @@ import { generateAnimalData } from '@/utils/animalGenerator';
 import { Animal, Discovery, Achievement, User, Badge } from '@/types/app';
 import { Platform } from 'react-native';
 
+// Result returned by Supabase Edge Function identify-species
+export type EdgeIdentificationResult = {
+  post_id: string;
+  image_url: string;
+  animal_id: string;
+  identified: {
+    species: string;
+    rarity: string;
+    quality: string;
+    kingdom?: string;
+    class?: string;
+    common_names?: string[];
+    fun_facts?: string[];
+  };
+};
+
 // Initial user data
 const initialUser: User = {
   id: 'user-1',
@@ -146,6 +162,7 @@ export const [AppContext, useAppContext] = createContextHook(() => {
   const [user, setUser] = useState<User>(initialUser);
   const [friends, setFriends] = useState<User[]>(mockFriends);
   const [isLoading, setIsLoading] = useState(true);
+  const [lastIdentificationResult, setLastIdentificationResult] = useState<EdgeIdentificationResult | null>(null);
 
 
 
@@ -457,6 +474,8 @@ export const [AppContext, useAppContext] = createContextHook(() => {
     user,
     friends,
     isLoading,
+    lastIdentificationResult,
+    setLastIdentificationResult,
     identifyAnimal,
     addToFavorites,
     claimAchievementReward,

@@ -1,10 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, ActivityIndicator, Platform } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity, ActivityIndicator, Platform, Alert } from 'react-native';
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import { Camera, FlipHorizontal2, Image as ImageIcon } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { useAppContext } from '@/context/AppContext';
+import { useAuth } from '@/context/AuthContext';
+import { supabase } from '@/lib/supabase';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { StatusBar } from 'expo-status-bar';
@@ -15,7 +17,8 @@ export default function CameraScreen() {
   const [isCapturing, setIsCapturing] = useState(false);
   const cameraRef = useRef<any>(null);
   const router = useRouter();
-  const { identifyAnimal } = useAppContext();
+  const { identifyAnimal, setLastIdentificationResult } = useAppContext();
+  const { session } = useAuth();
 
   useEffect(() => {
     requestPermission();
@@ -29,10 +32,11 @@ export default function CameraScreen() {
           await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         }
         
-        const photo = await cameraRef.current.takePictureAsync();
-        await processImage(photo.uri);
+        const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.9 });
+        await processImage(photo);
       } catch (error) {
         console.error('Error capturing image:', error);
+        Alert.alert('Capture Error', 'Unable to capture image. Please try again.');
       } finally {
         setIsCapturing(false);
       }
@@ -45,23 +49,60 @@ export default function CameraScreen() {
       allowsEditing: true,
       aspect: [4, 3],
       quality: 1,
+      base64: true,
     });
 
     if (!result.canceled && result.assets && result.assets.length > 0) {
-      await processImage(result.assets[0].uri);
+      await processImage(result.assets[0]);
     }
   };
 
-  const processImage = async (uri: string) => {
+  const processImage = async (asset: { uri: string; base64?: string }) => {
     try {
-      const id = await identifyAnimal(uri);
-      if (id) {
-        router.push(`/identification/${id}?source=camera`);
+      // Prefer real backend identification. Fallback to mock identify if anything fails.
+      if (!session) {
+        throw new Error('No active session');
       }
+
+      const accessToken = session.access_token;
+      const imageBase64 = asset.base64 || (await readAsBase64(asset.uri));
+
+      const response = await fetch('https://qrvnlnjymdwhndcxruvp.supabase.co/functions/v1/identify-species', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ imageBase64 }),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(errText || `Request failed with ${response.status}`);
+      }
+
+      const result = await response.json();
+      setLastIdentificationResult(result);
+      router.push('/identification/result?source=camera');
     } catch (error) {
       console.error('Error identifying animal:', error);
+      // Fallback to mock flow if needed
+      try {
+        const id = await identifyAnimal(asset.uri);
+        if (id) {
+          router.push(`/identification/${id}?source=camera`);
+        }
+      } catch (_) {}
+      Alert.alert('Identification Error', 'Could not identify the species. Please try again.');
     }
   };
+
+  async function readAsBase64(uri: string): Promise<string> {
+    // expo-file-system is not currently imported in this file; use a dynamic import
+    const FileSystem = await import('expo-file-system');
+    const b64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+    return b64;
+  }
 
   const toggleCameraFacing = () => {
     setFacing(current => (current === 'back' ? 'front' : 'back'));
