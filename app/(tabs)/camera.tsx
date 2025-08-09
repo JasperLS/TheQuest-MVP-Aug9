@@ -6,7 +6,6 @@ import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { useAppContext } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
-import { supabase } from '@/lib/supabase';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { StatusBar } from 'expo-status-bar';
@@ -45,7 +44,7 @@ export default function CameraScreen() {
 
   const handlePickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: [4, 3],
       quality: 1,
@@ -76,16 +75,27 @@ export default function CameraScreen() {
         body: JSON.stringify({ imageBase64 }),
       });
 
+      const responseText = await response.text();
       if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(errText || `Request failed with ${response.status}`);
+        // Try to parse JSON error and surface a clean message
+        let serverErrorMessage = `Request failed with ${response.status}`;
+        try {
+          const parsed = JSON.parse(responseText);
+          serverErrorMessage = parsed?.error || parsed?.message || serverErrorMessage;
+        } catch (_) {
+          if (responseText) serverErrorMessage = responseText;
+        }
+        throw new Error(serverErrorMessage);
       }
 
-      const result = await response.json();
+      // Response OK: parse JSON body
+      const result = JSON.parse(responseText);
       setLastIdentificationResult(result);
       router.push('/identification/result?source=camera');
     } catch (error) {
       console.error('Error identifying animal:', error);
+      const message = normalizeErrorMessage(error);
+      Alert.alert('Identification Error', message);
       // Fallback to mock flow if needed
       try {
         const id = await identifyAnimal(asset.uri);
@@ -93,7 +103,6 @@ export default function CameraScreen() {
           router.push(`/identification/${id}?source=camera`);
         }
       } catch (_) {}
-      Alert.alert('Identification Error', 'Could not identify the species. Please try again.');
     }
   };
 
@@ -102,6 +111,27 @@ export default function CameraScreen() {
     const FileSystem = await import('expo-file-system');
     const b64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
     return b64;
+  }
+
+  function normalizeErrorMessage(err: unknown): string {
+    if (err instanceof Error) {
+      const m = err.message?.trim();
+      // If message looks like JSON, try to extract a clean error message
+      if (m?.startsWith('{') || m?.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(m);
+          return parsed?.error || parsed?.message || m;
+        } catch (_) {
+          return m;
+        }
+      }
+      return m || 'Unknown error';
+    }
+    try {
+      return JSON.stringify(err);
+    } catch (_) {
+      return 'Unknown error';
+    }
   }
 
   const toggleCameraFacing = () => {
@@ -142,46 +172,45 @@ export default function CameraScreen() {
         style={styles.camera}
         facing={facing}
         testID="wildlife-camera"
-      >
-        <View style={styles.overlay}>
-          <View style={styles.topControls}>
-            <TouchableOpacity
-              style={styles.flipButton}
-              onPress={toggleCameraFacing}
-              disabled={isCapturing}
-              testID="flip-camera-button"
-            >
-              <FlipHorizontal2 color="#fff" size={24} />
-            </TouchableOpacity>
-          </View>
-          
-          <View style={styles.bottomControls}>
-            <TouchableOpacity
-              style={styles.galleryButton}
-              onPress={handlePickImage}
-              disabled={isCapturing}
-              testID="gallery-button"
-            >
-              <ImageIcon color="#fff" size={24} />
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={[styles.captureButton, isCapturing && styles.capturingButton]}
-              onPress={handleCapture}
-              disabled={isCapturing}
-              testID="capture-button"
-            >
-              {isCapturing ? (
-                <ActivityIndicator color="#2E7D32" size="large" />
-              ) : (
-                <View style={styles.captureButtonInner} />
-              )}
-            </TouchableOpacity>
-            
-            <View style={styles.placeholderButton} />
-          </View>
+      />
+      <View style={[styles.overlay, StyleSheet.absoluteFillObject]} pointerEvents="box-none">
+        <View style={styles.topControls}>
+          <TouchableOpacity
+            style={styles.flipButton}
+            onPress={toggleCameraFacing}
+            disabled={isCapturing}
+            testID="flip-camera-button"
+          >
+            <FlipHorizontal2 color="#fff" size={24} />
+          </TouchableOpacity>
         </View>
-      </CameraView>
+
+        <View style={styles.bottomControls}>
+          <TouchableOpacity
+            style={styles.galleryButton}
+            onPress={handlePickImage}
+            disabled={isCapturing}
+            testID="gallery-button"
+          >
+            <ImageIcon color="#fff" size={24} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.captureButton, isCapturing && styles.capturingButton]}
+            onPress={handleCapture}
+            disabled={isCapturing}
+            testID="capture-button"
+          >
+            {isCapturing ? (
+              <ActivityIndicator color="#2E7D32" size="large" />
+            ) : (
+              <View style={styles.captureButtonInner} />
+            )}
+          </TouchableOpacity>
+
+          <View style={styles.placeholderButton} />
+        </View>
+      </View>
       <StatusBar style="light" />
     </View>
   );

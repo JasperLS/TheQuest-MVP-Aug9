@@ -12,8 +12,8 @@ export type EdgeIdentificationResult = {
   animal_id: string;
   identified: {
     species: string;
-    rarity: string;
-    quality: string;
+    rarity: number | string;
+    quality: number | string;
     kingdom?: string;
     class?: string;
     common_names?: string[];
