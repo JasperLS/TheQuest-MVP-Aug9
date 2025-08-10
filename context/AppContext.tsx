@@ -6,6 +6,7 @@ import { Animal, Discovery, Achievement, User, Badge } from '@/types/app';
 import { Platform } from 'react-native';
 import { supabase } from '@/lib/supabase';
 import { getUserProfile, updateProfile, updateProfileImageUrl } from '@/utils/profileUtils';
+import { createPost } from '@/utils/postsUtils';
 
 // Result returned by Supabase Edge Function identify-species
 export type EdgeIdentificationResult = {
@@ -411,8 +412,14 @@ export const [AppContext, useAppContext] = createContextHook(() => {
   }
 
   // Add a discovery from an Edge Function result into local profile
-  const addDiscoveryFromEdgeResult = (result: EdgeIdentificationResult) => {
+  const addDiscoveryFromEdgeResult = async (result: EdgeIdentificationResult) => {
     try {
+      console.log('addDiscoveryFromEdgeResult called with:', {
+        post_id: result.post_id,
+        animal_id: result.animal_id,
+        image_url: result.image_url
+      });
+
       const rarityLabel = edgeRarityToLabel(result?.identified?.rarity);
       const funFacts = Array.isArray(result?.identified?.fun_facts) ? result.identified.fun_facts : [];
 
@@ -443,6 +450,35 @@ export const [AppContext, useAppContext] = createContextHook(() => {
         else if (newPoints >= 200) newRank = 'Intermediate';
         return { ...prev, points: newPoints, level: newLevel, rank: newRank };
       });
+
+      // Create post in database if user is authenticated
+      if (user.id !== 'user-1' && user.id) {
+        console.log('Creating database post for user:', user.id);
+        try {
+          const quality = typeof result.identified.quality === 'number' 
+            ? result.identified.quality 
+            : parseInt(result.identified.quality as string, 10) || 5;
+
+          const { post, error } = await createPost({
+            user_id: user.id,
+            animal_id: result.animal_id || null,
+            image_url: result.image_url,
+            location: null, // TODO: Add location support
+            quality: Math.max(1, Math.min(10, quality)), // Ensure quality is between 1-10
+            caption: null, // TODO: Add caption support
+          });
+
+          if (error) {
+            console.error('Failed to create post in database:', error);
+          } else {
+            console.log('Post created successfully in database:', post?.id);
+          }
+        } catch (dbError) {
+          console.error('Error creating post in database:', dbError);
+        }
+      } else {
+        console.log('Skipping database post creation - user not authenticated or is mock user');
+      }
     } catch (error) {
       console.error('Failed to add discovery from edge result:', error);
     }

@@ -1,10 +1,13 @@
-import React, { useMemo, useState } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, FlatList, Image, RefreshControl, Platform } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { StyleSheet, View, Text, TouchableOpacity, FlatList, Image, RefreshControl, Platform, Alert } from 'react-native';
 import { Heart, MessageCircle, Share } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useAppContext } from '@/context/AppContext';
+import { useAuth } from '@/context/AuthContext';
 import { getRarityColor, getRarityLabel } from '@/utils/rarityUtils';
 import * as Haptics from 'expo-haptics';
+import { toggleLike, getLikeCount, isPostLikedByUser } from '@/utils/likesUtils';
+import { getLatestPosts, FeedPost as DatabaseFeedPost, getAllPostsWithDuplicates } from '@/utils/postsUtils';
 
 interface FeedPost {
   id: string;
@@ -29,65 +32,190 @@ interface FeedPost {
 
 export default function FeedScreen() {
   const router = useRouter();
-  const { discoveries, user } = useAppContext();
+  const { user: authUser } = useAuth();
+  const { user } = useAppContext();
   const [refreshing, setRefreshing] = useState(false);
-  const [likedPosts, setLikedPosts] = useState<Set<string>>(new Set());
+  const [feedPosts, setFeedPosts] = useState<DatabaseFeedPost[]>([]);
+  const [postLikes, setPostLikes] = useState<Record<string, { count: number; isLiked: boolean }>>({});
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Build feed purely from the user's own discoveries
-  const feedPosts = useMemo<FeedPost[]>(() => {
-    const posts = discoveries.map((discovery) => ({
-      id: `own-${discovery.id}`,
-      user: {
-        name: user.name,
-        avatar: user.profilePicture || 'https://images.unsplash.com/photo-1535083783855-76ae62b2914e?q=80&w=200&auto=format&fit=crop',
-      },
-      discovery: {
-        id: discovery.id,
-        name: discovery.name,
-        scientificName: discovery.scientificName,
-        imageUri: discovery.imageUri,
-        rarity: discovery.rarity,
-        discoveredAt: discovery.discoveredAt,
-      },
-      likes: 0,
-      comments: 0,
-      isLiked: false,
-    }));
+  // Load posts from database and likes data
+  useEffect(() => {
+    const loadData = async () => {
+      if (!authUser?.id) return;
+      
+      setIsLoading(true);
+      try {
+        // Check for duplicates first
+        const { duplicates } = await getAllPostsWithDuplicates();
+        if (duplicates.length > 0) {
+          console.warn('Feed: Found duplicate posts in database:', duplicates.length, 'groups');
+        }
+        
+        // Fetch latest posts from database
+        const { posts, error: postsError } = await getLatestPosts();
+        if (postsError) {
+          console.error('Error fetching posts:', postsError);
+          return;
+        }
+        
+        console.log('Feed: Setting posts in state:', posts.length, 'posts');
+        posts.forEach((post, index) => {
+          console.log(`Feed Post ${index + 1}:`, {
+            id: post.id,
+            image_url: post.image_url,
+            created_at: post.created_at
+          });
+        });
+        
+        setFeedPosts(posts);
+        
+        // Load likes data for all posts
+        const newPostLikes: Record<string, { count: number; isLiked: boolean }> = {};
+        
+        for (const post of posts) {
+          try {
+            // Get like count
+            const { count, error: countError } = await getLikeCount(post.id);
+            if (countError) {
+              console.error(`Error getting like count for ${post.id}:`, countError);
+              continue;
+            }
+            
+            // Check if current user liked this post
+            const { isLiked, error: likeError } = await isPostLikedByUser(post.id, authUser.id);
+            if (likeError) {
+              console.error(`Error checking if post is liked for ${post.id}:`, likeError);
+              continue;
+            }
+            
+            newPostLikes[post.id] = { count, isLiked };
+          } catch (error) {
+            console.error(`Error processing post ${post.id}:`, error);
+            continue;
+          }
+        }
+        
+        setPostLikes(newPostLikes);
+      } catch (error) {
+        console.error('Error loading data:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
 
-    return posts.sort((a, b) =>
-      new Date(b.discovery.discoveredAt).getTime() - new Date(a.discovery.discoveredAt).getTime()
-    );
-  }, [discoveries, user]);
+    loadData();
+  }, [authUser?.id]);
 
-  const handleLike = (postId: string) => {
+  const handleLike = async (postId: string) => {
+    if (!authUser?.id) {
+      Alert.alert('Error', 'You must be logged in to like posts');
+      return;
+    }
+
     if (Platform.OS !== 'web') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
-    setLikedPosts(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(postId)) {
-        newSet.delete(postId);
+
+    try {
+      // Toggle the like in the database
+      const result = await toggleLike(postId, authUser.id);
+      
+      if (result.success) {
+        // Update local state
+        setPostLikes(prev => ({
+          ...prev,
+          [postId]: {
+            count: prev[postId]?.count || 0,
+            isLiked: result.isLiked,
+          }
+        }));
+        
+        // Update the like count
+        if (result.isLiked) {
+          setPostLikes(prev => ({
+            ...prev,
+            [postId]: {
+              ...prev[postId]!,
+              count: (prev[postId]?.count || 0) + 1,
+            }
+          }));
+        } else {
+          setPostLikes(prev => ({
+            ...prev,
+            [postId]: {
+              ...prev[postId]!,
+              count: Math.max(0, (prev[postId]?.count || 0) - 1),
+            }
+          }));
+        }
       } else {
-        newSet.add(postId);
+        Alert.alert('Error', result.error || 'Failed to update like');
       }
-      return newSet;
-    });
+    } catch (error) {
+      console.error('Error handling like:', error);
+      Alert.alert('Error', 'Failed to update like. Please try again.');
+    }
   };
 
-  const handlePostPress = (discoveryId: string) => {
-    router.push(`/identification/${discoveryId}`);
+  const handlePostPress = (postId: string) => {
+    // For now, just show an alert since we don't have individual post screens yet
+    Alert.alert('Post Details', 'Individual post view coming soon!');
   };
 
-  // Camera entry handled elsewhere (tabs)
-
-  const onRefresh = () => {
+  const onRefresh = async () => {
     setRefreshing(true);
+    
+    // Refresh posts and likes data
+    if (authUser?.id) {
+      try {
+        // Fetch latest posts from database
+        const { posts, error: postsError } = await getLatestPosts();
+        if (postsError) {
+          console.error('Error fetching posts during refresh:', postsError);
+        } else {
+          setFeedPosts(posts);
+        }
+        
+        // Refresh likes data
+        const newPostLikes: Record<string, { count: number; isLiked: boolean }> = {};
+        
+        for (const post of posts) {
+          try {
+            // Get like count
+            const { count, error: countError } = await getLikeCount(post.id);
+            if (countError) {
+              console.error(`Error getting like count for ${post.id} during refresh:`, countError);
+              continue;
+            }
+            
+            // Check if current user liked this post
+            const { isLiked, error: likeError } = await isPostLikedByUser(post.id, authUser.id);
+            if (likeError) {
+              console.error(`Error checking if post is liked for ${post.id} during refresh:`, likeError);
+              continue;
+            }
+              
+            newPostLikes[post.id] = { count, isLiked };
+          } catch (error) {
+            console.error(`Error processing post ${post.id} during refresh:`, error);
+            continue;
+          }
+        }
+        
+        setPostLikes(newPostLikes);
+      } catch (error) {
+        console.error('Error refreshing data:', error);
+      }
+    }
+    
     setTimeout(() => setRefreshing(false), 1000);
   };
 
-  const renderPost = ({ item }: { item: FeedPost }) => {
-    const isLiked = likedPosts.has(item.id) || item.isLiked;
-    const timeAgo = getTimeAgo(item.discovery.discoveredAt);
+  const renderPost = ({ item }: { item: DatabaseFeedPost }) => {
+    const isLiked = postLikes[item.id]?.isLiked || false;
+    const likeCount = postLikes[item.id]?.count || 0;
+    const timeAgo = getTimeAgo(item.created_at);
 
     return (
       <View style={styles.postContainer}>
@@ -95,18 +223,20 @@ export default function FeedScreen() {
           <Image source={{ uri: item.user.avatar }} style={styles.userAvatar} />
           <View style={styles.userInfo}>
             <Text style={styles.userName}>{item.user.name}</Text>
-            <Text style={styles.postTime}>{timeAgo} • {item.discovery.location}</Text>
+            <Text style={styles.postTime}>{timeAgo} • {item.location || 'Unknown location'}</Text>
           </View>
         </View>
 
         <TouchableOpacity 
-          onPress={() => handlePostPress(item.discovery.id)}
+          onPress={() => handlePostPress(item.id)}
           activeOpacity={0.95}
         >
-          <Image source={{ uri: item.discovery.imageUri }} style={styles.postImage} />
-          <View style={[styles.rarityBadge, { backgroundColor: getRarityColor(item.discovery.rarity) }]}>
-            <Text style={styles.rarityText}>{getRarityLabel(item.discovery.rarity)}</Text>
-          </View>
+          <Image source={{ uri: item.image_url }} style={styles.postImage} />
+          {item.animal && (
+            <View style={[styles.rarityBadge, { backgroundColor: getRarityColor(item.animal.rarity) }]}>
+              <Text style={styles.rarityText}>{getRarityLabel(item.animal.rarity)}</Text>
+            </View>
+          )}
         </TouchableOpacity>
 
         <View style={styles.postActions}>
@@ -121,13 +251,13 @@ export default function FeedScreen() {
               fill={isLiked ? '#F44336' : 'none'}
             />
             <Text style={[styles.actionText, isLiked && styles.likedText]}>
-              {item.likes + (likedPosts.has(item.id) && !item.isLiked ? 1 : 0)}
+              {likeCount}
             </Text>
           </TouchableOpacity>
           
           <TouchableOpacity style={styles.actionButton}>
             <MessageCircle color="#8D6E63" size={24} />
-            <Text style={styles.actionText}>{item.comments}</Text>
+            <Text style={styles.actionText}>0</Text>
           </TouchableOpacity>
           
           <TouchableOpacity style={styles.actionButton}>
@@ -136,8 +266,12 @@ export default function FeedScreen() {
         </View>
 
         <View style={styles.postContent}>
-          <Text style={styles.animalName}>{item.discovery.name}</Text>
-          <Text style={styles.scientificName}>{item.discovery.scientificName}</Text>
+          {item.animal && (
+            <>
+              <Text style={styles.animalName}>{item.animal.name}</Text>
+              <Text style={styles.scientificName}>{item.animal.scientificName}</Text>
+            </>
+          )}
           {item.caption && (
             <Text style={styles.caption}>
               <Text style={styles.captionUser}>{item.user.name}</Text> {item.caption}
@@ -160,6 +294,14 @@ export default function FeedScreen() {
     return date.toLocaleDateString();
   };
 
+  if (isLoading) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.loadingText}>Loading posts...</Text>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <FlatList
@@ -171,113 +313,41 @@ export default function FeedScreen() {
         }
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.feedContent}
+        ListEmptyComponent={
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyStateText}>No posts yet</Text>
+            <Text style={styles.emptyStateSubtext}>Take a photo of an animal to get started!</Text>
+          </View>
+        }
       />
-      
-
     </View>
   );
-
-
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#FFFDE7',
-  },
-  feedContent: {
-    paddingBottom: 100,
-  },
-  postContainer: {
-    backgroundColor: '#fff',
-    marginBottom: 12,
-    borderRadius: 0,
-  },
-  postHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-  },
-  userAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    marginRight: 12,
-  },
-  userInfo: {
-    flex: 1,
-  },
-  userName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#424242',
-  },
-  postTime: {
-    fontSize: 12,
-    color: '#8D6E63',
-    marginTop: 2,
-  },
-  postImage: {
-    width: '100%',
-    height: 300,
-    resizeMode: 'cover',
-  },
-  rarityBadge: {
-    position: 'absolute',
-    top: 12,
-    right: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-  },
-  rarityText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
-  postActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  actionButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginRight: 20,
-  },
-  actionText: {
-    fontSize: 14,
-    color: '#8D6E63',
-    marginLeft: 6,
-    fontWeight: '500',
-  },
-  likedText: {
-    color: '#F44336',
-  },
-  postContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 16,
-  },
-  animalName: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#424242',
-    marginBottom: 2,
-  },
-  scientificName: {
-    fontSize: 14,
-    fontStyle: 'italic',
-    color: '#8D6E63',
-    marginBottom: 8,
-  },
-  caption: {
-    fontSize: 14,
-    color: '#424242',
-    lineHeight: 20,
-  },
-  captionUser: {
-    fontWeight: 'bold',
-  },
-
+  container: { flex: 1, backgroundColor: '#FFFDE7' },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFDE7', padding: 24 },
+  loadingText: { color: '#8D6E63', fontSize: 16 },
+  emptyState: { alignItems: 'center', padding: 40 },
+  emptyStateText: { fontSize: 18, fontWeight: 'bold', color: '#8D6E63', marginBottom: 8 },
+  emptyStateSubtext: { fontSize: 14, color: '#8D6E63', textAlign: 'center' },
+  feedContent: { paddingBottom: 24 },
+  postContainer: { backgroundColor: '#fff', marginBottom: 16, borderRadius: 12, overflow: 'hidden', elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 },
+  postHeader: { flexDirection: 'row', alignItems: 'center', padding: 16, paddingBottom: 12 },
+  userAvatar: { width: 40, height: 40, borderRadius: 20, marginRight: 12 },
+  userInfo: { flex: 1 },
+  userName: { fontSize: 16, fontWeight: 'bold', color: '#424242', marginBottom: 2 },
+  postTime: { fontSize: 12, color: '#8D6E63' },
+  postImage: { width: '100%', height: 300, backgroundColor: '#eee' },
+  rarityBadge: { position: 'absolute', top: 12, right: 12, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12 },
+  rarityText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
+  postActions: { flexDirection: 'row', padding: 16, paddingTop: 12, paddingBottom: 8 },
+  actionButton: { flexDirection: 'row', alignItems: 'center', marginRight: 24 },
+  actionText: { marginLeft: 6, fontSize: 14, color: '#8D6E63' },
+  likedText: { color: '#F44336', fontWeight: 'bold' },
+  postContent: { padding: 16, paddingTop: 0 },
+  animalName: { fontSize: 18, fontWeight: 'bold', color: '#424242', marginBottom: 2 },
+  scientificName: { fontSize: 14, color: '#8D6E63', fontStyle: 'italic', marginBottom: 8 },
+  caption: { fontSize: 14, color: '#424242', lineHeight: 20 },
+  captionUser: { fontWeight: 'bold' },
 });

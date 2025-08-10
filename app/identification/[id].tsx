@@ -6,6 +6,7 @@ import { Camera, Heart, Info, MapPin, Save, Clock, MessageCircle, Send } from 'l
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { getRarityColor, getRarityLabel } from '@/utils/rarityUtils';
+import { toggleLike, getLikeCount, isPostLikedByUser } from '@/utils/likesUtils';
 
 interface Comment {
   id: string;
@@ -18,6 +19,12 @@ interface Comment {
   likes: number;
 }
 
+// Helper function to check if a string is a valid UUID
+function isValidUUID(str: string): boolean {
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  return uuidRegex.test(str);
+}
+
 export default function IdentificationScreen() {
   const { id, source } = useLocalSearchParams<{ id: string; source?: string }>();
   const { discoveries, addToFavorites, user } = useAppContext();
@@ -25,7 +32,7 @@ export default function IdentificationScreen() {
   const discovery = discoveries.find(d => d.id === id);
   const [isSaved, setIsSaved] = useState(false);
   const [isLiked, setIsLiked] = useState(false);
-  const [likes, setLikes] = useState(Math.floor(Math.random() * 50) + 15);
+  const [likes, setLikes] = useState(0);
   const [newComment, setNewComment] = useState('');
   const [comments, setComments] = useState<Comment[]>([
     {
@@ -81,6 +88,41 @@ export default function IdentificationScreen() {
       }),
     ]).start();
   }, [scaleAnim, opacityAnim]);
+
+  // Load likes data when component mounts
+  useEffect(() => {
+    const loadLikesData = async () => {
+      if (!discovery?.id || !user?.id) return;
+      
+      // Only load likes for discoveries with valid UUIDs
+      if (!isValidUUID(discovery.id)) {
+        console.log(`Skipping likes loading for discovery with invalid UUID: ${discovery.id}`);
+        return;
+      }
+      
+      try {
+        // Get like count
+        const { count, error: countError } = await getLikeCount(discovery.id);
+        if (countError) {
+          console.error(`Error getting like count for ${discovery.id}:`, countError);
+          return;
+        }
+        setLikes(count);
+        
+        // Check if current user liked this post
+        const { isLiked: userLiked, error: likeError } = await isPostLikedByUser(discovery.id, user.id);
+        if (likeError) {
+          console.error(`Error checking if post is liked for ${discovery.id}:`, likeError);
+          return;
+        }
+        setIsLiked(userLiked);
+      } catch (error) {
+        console.error('Error loading likes data:', error);
+      }
+    };
+
+    loadLikesData();
+  }, [discovery?.id, user?.id]);
   
   if (!discovery) {
     return (
@@ -122,12 +164,43 @@ export default function IdentificationScreen() {
     );
   };
 
-  const handleLike = () => {
+  const handleLike = async () => {
+    if (!user?.id || !discovery?.id) {
+      Alert.alert('Error', 'You must be logged in to like posts');
+      return;
+    }
+
+    // Check if the discovery ID is a valid UUID
+    if (!isValidUUID(discovery.id)) {
+      Alert.alert('Error', 'This post cannot be liked. It may be an older post that needs to be re-uploaded.');
+      return;
+    }
+
     if (Platform.OS !== 'web') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
-    setIsLiked(!isLiked);
-    setLikes(prev => isLiked ? prev - 1 : prev + 1);
+
+    try {
+      // Toggle the like in the database
+      const result = await toggleLike(discovery.id, user.id);
+      
+      if (result.success) {
+        // Update local state
+        setIsLiked(result.isLiked);
+        
+        // Update the like count
+        if (result.isLiked) {
+          setLikes(prev => prev + 1);
+        } else {
+          setLikes(prev => Math.max(0, prev - 1));
+        }
+      } else {
+        Alert.alert('Error', result.error || 'Failed to update like');
+      }
+    } catch (error) {
+      console.error('Error handling like:', error);
+      Alert.alert('Error', 'Failed to update like. Please try again.');
+    }
   };
 
   const handleAddComment = () => {
