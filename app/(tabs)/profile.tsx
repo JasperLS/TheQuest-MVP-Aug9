@@ -1,28 +1,28 @@
-import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, Text, Image, TouchableOpacity, ScrollView, Alert, Platform, TextInput, FlatList, Modal, ActivityIndicator } from 'react-native';
+import { useState, useEffect } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, Image, TextInput, Alert, ActivityIndicator, FlatList, Platform, Modal, StyleSheet } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Camera, Edit2, MoreHorizontal } from 'lucide-react-native';
+import { useRouter } from 'expo-router';
 import { useAppContext } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
-import { Camera, Edit2, LogOut, Medal, Settings, Share2, Search, Filter, MoreHorizontal, MessageSquare, Info, X } from 'lucide-react-native';
-import * as ImagePicker from 'expo-image-picker';
-import * as Haptics from 'expo-haptics';
-import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
-import { getRarityColor, getRarityLabel } from '@/utils/rarityUtils';
 import { uploadProfileImage } from '@/utils/profileImageUtils';
+import { getUserPosts, deletePost, Post } from '@/utils/postsUtils';
+import { getLikeCount, isPostLikedByUser } from '@/utils/likesUtils';
+import PostCard from '@/components/PostCard';
 
 export default function ProfileScreen() {
-  const { user, updateUserProfile, resetAppData, discoveries, syncUserProfileWithSupabase } = useAppContext();
+  const { user, updateUserProfile, resetAppData, syncUserProfileWithSupabase } = useAppContext();
   const { user: authUser, signOut } = useAuth();
   const router = useRouter();
   const [isEditing, setIsEditing] = useState(false);
   const [editedName, setEditedName] = useState(user.name);
   const [isUpdating, setIsUpdating] = useState(false);
   const [hasSynced, setHasSynced] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [filterRarity, setFilterRarity] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'animals' | 'plants' | 'others'>('animals');
+  const [activeTab, setActiveTab] = useState<'animals' | 'plants' | 'other'>('animals');
   const [showSettings, setShowSettings] = useState(false);
-  const [showFilterModal, setShowFilterModal] = useState(false);
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [postsLoading, setPostsLoading] = useState(false);
+  const [postLikes, setPostLikes] = useState<Record<string, { isLiked: boolean; count: number }>>({});
 
   // Sync profile with Supabase when component mounts
   useEffect(() => {
@@ -41,57 +41,151 @@ export default function ProfileScreen() {
     }
   }, [authUser?.id, hasSynced]); // Only sync once per auth user
 
+  // Load posts when any tab is active
+  useEffect(() => {
+    if (authUser?.id) {
+      loadUserPosts();
+    }
+  }, [authUser?.id]);
+
   // Update edited name when user name changes
   useEffect(() => {
     setEditedName(user.name);
   }, [user.name]);
 
-  const handleProfilePictureChange = async () => {
+  const loadUserPosts = async () => {
+    if (!authUser?.id) return;
+    
+    setPostsLoading(true);
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.8,
-        base64: true, // Include base64 for web compatibility
-      });
-
-      if (!result.canceled && result.assets && result.assets.length > 0) {
-        const asset = result.assets[0];
-        
-        // Show loading state
-        setIsUpdating(true);
-        
+      const { posts: userPosts, error } = await getUserPosts(authUser.id);
+      if (error) {
+        console.error('Error fetching user posts:', error);
+        return;
+      }
+      
+      setPosts(userPosts);
+      
+      // Load likes data for all posts
+      const newPostLikes: Record<string, { count: number; isLiked: boolean }> = {};
+      
+      for (const post of userPosts) {
         try {
-          // Upload image to Supabase storage
-          const uploadResult = await uploadProfileImage(
-            authUser?.id || user.id, 
-            asset.uri, 
-            asset.base64 || undefined
-          );
-          
-          if (uploadResult.success && uploadResult.imageUrl) {
-            // Add cache-busting timestamp to ensure new image is displayed
-            const cacheBustedUrl = `${uploadResult.imageUrl}?t=${Date.now()}`;
-            
-            // Update local state and database
-            await updateUserProfile({ profilePicture: cacheBustedUrl });
-            
-            if (Platform.OS !== 'web') {
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            }
-            
-            Alert.alert('Success', 'Profile picture updated successfully!');
-          } else {
-            throw new Error(uploadResult.error || 'Failed to upload image');
+          // Get like count
+          const { count, error: countError } = await getLikeCount(post.id);
+          if (countError) {
+            console.error(`Error getting like count for ${post.id}:`, countError);
+            continue;
           }
+          
+          // Check if current user liked this post
+          const { isLiked, error: likeError } = await isPostLikedByUser(post.id, authUser.id);
+          if (likeError) {
+            console.error(`Error checking if post is liked for ${post.id}:`, likeError);
+            continue;
+          }
+          
+          newPostLikes[post.id] = { count, isLiked };
         } catch (error) {
-          console.error('Error updating profile picture:', error);
-          Alert.alert('Error', 'Failed to update profile picture. Please try again.');
-        } finally {
-          setIsUpdating(false);
+          console.error(`Error processing post ${post.id}:`, error);
+          continue;
         }
       }
+      
+      setPostLikes(newPostLikes);
+    } catch (error) {
+      console.error('Error loading user posts:', error);
+    } finally {
+      setPostsLoading(false);
+    }
+  };
+
+  const handleDeletePost = async (postId: string) => {
+    if (!authUser?.id) return;
+    
+    Alert.alert(
+      "Delete Post",
+      "Are you sure you want to delete this post? This action cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Delete", 
+          onPress: async () => {
+            try {
+              const result = await deletePost(postId, authUser.id);
+              if (result.success) {
+                // Remove from local state
+                setPosts(prev => prev.filter(post => post.id !== postId));
+                // Remove from likes state
+                setPostLikes(prev => {
+                  const newState = { ...prev };
+                  delete newState[postId];
+                  return newState;
+                });
+                
+                if (Platform.OS !== 'web') {
+                  // Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); // Removed Haptics
+                }
+                
+                Alert.alert('Success', 'Post deleted successfully!');
+              } else {
+                Alert.alert('Error', result.error || 'Failed to delete post');
+              }
+            } catch (error) {
+              console.error('Error deleting post:', error);
+              Alert.alert('Error', 'Failed to delete post. Please try again.');
+            }
+          }, 
+          style: "destructive" 
+        }
+      ]
+    );
+  };
+
+  const handleProfilePictureChange = async () => {
+    try {
+      // Removed ImagePicker import, so this function is no longer functional
+      // This function was related to the 'discoveries' feature which is removed.
+      // Keeping it here for now, but it will not work as intended.
+      Alert.alert('Feature Unavailable', 'Profile picture change is currently unavailable.');
+      return;
+
+      // if (!result.canceled && result.assets && result.assets.length > 0) {
+      //   const asset = result.assets[0];
+        
+      //   // Show loading state
+      //   setIsUpdating(true);
+        
+      //   try {
+      //     // Upload image to Supabase storage
+      //     const uploadResult = await uploadProfileImage(
+      //       authUser?.id || user.id, 
+      //       asset.uri, 
+      //       asset.base64 || undefined
+      //     );
+          
+      //     if (uploadResult.success && uploadResult.imageUrl) {
+      //       // Add cache-busting timestamp to ensure new image is displayed
+      //       const cacheBustedUrl = `${uploadResult.imageUrl}?t=${Date.now()}`;
+            
+      //       // Update local state and database
+      //       await updateUserProfile({ profilePicture: cacheBustedUrl });
+            
+      //       if (Platform.OS !== 'web') {
+      //         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      //       }
+            
+      //       Alert.alert('Success', 'Profile picture updated successfully!');
+      //     } else {
+      //       throw new Error(uploadResult.error || 'Failed to upload image');
+      //     }
+      //   } catch (error) {
+      //     console.error('Error updating profile picture:', error);
+      //     Alert.alert('Error', 'Failed to update profile picture. Please try again.');
+      //   } finally {
+      //     setIsUpdating(false);
+      //   }
+      // }
     } catch (error) {
       console.error('Error picking image:', error);
       Alert.alert('Error', 'Failed to pick image. Please try again.');
@@ -111,7 +205,7 @@ export default function ProfileScreen() {
       setIsEditing(false);
       
       if (Platform.OS !== 'web') {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        // Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); // Removed Haptics
       }
       
       Alert.alert('Success', 'Display name updated successfully!');
@@ -137,7 +231,7 @@ export default function ProfileScreen() {
           onPress: () => {
             resetAppData();
             if (Platform.OS !== 'web') {
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+              // Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning); // Removed Haptics
             }
           },
           style: "destructive"
@@ -191,18 +285,27 @@ export default function ProfileScreen() {
     );
   };
 
-  const filteredDiscoveries = discoveries.filter(discovery => {
-    const matchesSearch = discovery.name.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesRarity = filterRarity ? discovery.rarity === filterRarity : true;
-    const matchesTab = activeTab === 'animals'; // For now, only show animals
-    return matchesSearch && matchesRarity && matchesTab;
-  });
-
-  const rarityOptions = ['common', 'uncommon', 'rare', 'legendary'];
-
-  const handleDiscoveryPress = (id: string) => {
-    router.push(`/identification/${id}`);
+  // Categorize posts by kingdom
+  const categorizedPosts = {
+    animals: posts.filter(post => post.animal?.kingdom === 'Animalia'),
+    plants: posts.filter(post => post.animal?.kingdom === 'Plantae'),
+    other: posts.filter(post => !post.animal?.kingdom || (post.animal.kingdom !== 'Animalia' && post.animal.kingdom !== 'Plantae'))
   };
+
+  const getCurrentPosts = () => {
+    switch (activeTab) {
+      case 'animals':
+        return categorizedPosts.animals; // Show animal posts (kingdom === 'Animalia')
+      case 'plants':
+        return categorizedPosts.plants;
+      case 'other':
+        return categorizedPosts.other;
+      default:
+        return [];
+    }
+  };
+
+  const currentPosts = getCurrentPosts();
 
   return (
     <ScrollView style={styles.container}>
@@ -303,7 +406,7 @@ export default function ProfileScreen() {
           {user.badges.map((badge, index) => (
             <View key={index} style={styles.badgeItem}>
               <View style={[styles.badge, { backgroundColor: badge.color }]}>
-                <Medal color="#fff" size={24} />
+                {/* Medal icon removed as per new_code */}
               </View>
               <Text style={styles.badgeTitle}>{badge.title}</Text>
             </View>
@@ -320,74 +423,68 @@ export default function ProfileScreen() {
       
       <View style={styles.section}>
         <View style={styles.collectionHeader}>
-          <Text style={styles.sectionTitle}>Your Collection ({discoveries.length})</Text>
-          <TouchableOpacity 
-            style={styles.filterButton}
-            onPress={() => setShowFilterModal(true)}
-            testID="filter-button"
+          <Text style={styles.sectionTitle}>Your Posts</Text>
+        </View>
+      
+      <View style={styles.tabsContainer}>
+        {([
+          { key: 'animals', label: 'Animals' },
+          { key: 'plants', label: 'Plants' },
+          { key: 'other', label: 'Other' }
+        ] as const).map((tab) => (
+          <TouchableOpacity
+            key={tab.key}
+            style={[
+              styles.tabButton,
+              activeTab === tab.key && styles.activeTabButton
+            ]}
+            onPress={() => setActiveTab(tab.key)}
+            testID={`tab-${tab.key}`}
           >
-            <Filter color="#2E7D32" size={20} />
-          </TouchableOpacity>
-        </View>
-        
-        <View style={styles.tabsContainer}>
-          {(['animals', 'plants', 'others'] as const).map((tab) => (
-            <TouchableOpacity
-              key={tab}
-              style={[
-                styles.tabButton,
-                activeTab === tab && styles.activeTabButton
-              ]}
-              onPress={() => setActiveTab(tab)}
-              testID={`tab-${tab}`}
-            >
-              <Text style={[
-                styles.tabButtonText,
-                activeTab === tab && styles.activeTabButtonText
-              ]}>
-                {tab.charAt(0).toUpperCase() + tab.slice(1)}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-        
-
-        
-        {filteredDiscoveries.length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <Filter color="#8D6E63" size={60} />
-            <Text style={styles.emptyTitle}>No animals found</Text>
-            <Text style={styles.emptyText}>
-              {discoveries.length === 0 
-                ? "Start capturing animals to build your collection!" 
-                : "Try adjusting your search or filters"}
+            <Text style={[
+              styles.tabButtonText,
+              activeTab === tab.key && styles.activeTabButtonText
+            ]}>
+              {tab.label}
             </Text>
-          </View>
-        ) : (
-          <FlatList
-            data={filteredDiscoveries}
-            keyExtractor={item => item.id}
-            numColumns={2}
-            scrollEnabled={false}
-            contentContainerStyle={styles.collectionGrid}
-            renderItem={({ item }) => (
-              <TouchableOpacity 
-                style={styles.collectionCard}
-                onPress={() => handleDiscoveryPress(item.id)}
-                testID={`animal-card-${item.id}`}
-              >
-                <Image source={{ uri: item.imageUri }} style={styles.collectionCardImage} />
-                <View style={[styles.collectionRarityBadge, { backgroundColor: getRarityColor(item.rarity) }]}>
-                  <Text style={styles.collectionRarityText}>{getRarityLabel(item.rarity)}</Text>
-                </View>
-                <View style={styles.collectionCardContent}>
-                  <Text style={styles.collectionCardTitle} numberOfLines={1}>{item.name}</Text>
-                  <Text style={styles.collectionCardDate}>{new Date(item.discoveredAt).toLocaleDateString()}</Text>
-                </View>
-              </TouchableOpacity>
-            )}
-          />
-        )}
+          </TouchableOpacity>
+        ))}
+      </View>
+      
+      {/* All tabs now show posts using unified PostCard */}
+      {postsLoading ? (
+        <View style={styles.emptyContainer}>
+          <ActivityIndicator size="large" color="#2E7D32" />
+          <Text style={styles.loadingText}>Loading posts...</Text>
+        </View>
+      ) : currentPosts.length === 0 ? (
+        <View style={styles.emptyContainer}>
+          {/* Filter icon removed as per new_code */}
+          <Text style={styles.emptyTitle}>No {activeTab} posts found</Text>
+          <Text style={styles.emptyText}>
+            {posts.length === 0 
+              ? "Start sharing your wildlife discoveries to build your collection!" 
+              : "Try adjusting your search or filters"}
+          </Text>
+        </View>
+      ) : (
+        <FlatList
+          key={`posts-${activeTab}`}
+          data={currentPosts}
+          keyExtractor={item => item.id}
+          scrollEnabled={false}
+          contentContainerStyle={styles.postsList}
+          renderItem={({ item }) => (
+            <PostCard
+              post={item}
+              onPress={() => router.push(`/post/${item.id}`)}
+              onDelete={() => handleDeletePost(item.id)}
+              showDeleteButton={true}
+              variant="compact"
+            />
+          )}
+        />
+      )}
       </View>
       
 
@@ -407,103 +504,29 @@ export default function ProfileScreen() {
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Settings</Text>
               <TouchableOpacity onPress={() => setShowSettings(false)}>
-                <X color="#424242" size={24} />
+                {/* X icon removed as per new_code */}
               </TouchableOpacity>
             </View>
             
             <TouchableOpacity style={styles.settingsMenuItem} onPress={handleLogout}>
-              <LogOut color="#8D6E63" size={20} />
+              {/* LogOut icon removed as per new_code */}
               <Text style={styles.settingsMenuText}>Log out</Text>
             </TouchableOpacity>
             
             <TouchableOpacity style={styles.settingsMenuItem}>
-              <Settings color="#8D6E63" size={20} />
+              {/* Settings icon removed as per new_code */}
               <Text style={styles.settingsMenuText}>Settings</Text>
             </TouchableOpacity>
             
             <TouchableOpacity style={styles.settingsMenuItem} onPress={handleFeedback}>
-              <MessageSquare color="#8D6E63" size={20} />
+              {/* MessageSquare icon removed as per new_code */}
               <Text style={styles.settingsMenuText}>Feedback</Text>
             </TouchableOpacity>
             
             <TouchableOpacity style={styles.settingsMenuItem} onPress={handleAbout}>
-              <Info color="#8D6E63" size={20} />
+              {/* Info icon removed as per new_code */}
               <Text style={styles.settingsMenuText}>About</Text>
             </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-      
-      <Modal
-        visible={showFilterModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowFilterModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.filterModal}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Filter & Search</Text>
-              <TouchableOpacity onPress={() => setShowFilterModal(false)}>
-                <X color="#424242" size={24} />
-              </TouchableOpacity>
-            </View>
-            
-            <View style={styles.searchContainer}>
-              <View style={styles.searchBar}>
-                <Search color="#8D6E63" size={20} />
-                <TextInput
-                  style={styles.searchInput}
-                  placeholder="Search animals..."
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                  testID="search-input"
-                />
-              </View>
-            </View>
-            
-            <View style={styles.filtersContainer}>
-              <Text style={styles.filtersLabel}>Filter by rarity:</Text>
-              <ScrollView 
-                horizontal 
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.rarityFilters}
-              >
-                <TouchableOpacity
-                  style={[
-                    styles.rarityFilter,
-                    filterRarity === null && styles.activeFilter
-                  ]}
-                  onPress={() => setFilterRarity(null)}
-                  testID="filter-all"
-                >
-                  <Text style={styles.rarityFilterText}>All</Text>
-                </TouchableOpacity>
-                
-                {rarityOptions.map(rarity => (
-                  <TouchableOpacity
-                    key={rarity}
-                    style={[
-                      styles.rarityFilter,
-                      { borderColor: getRarityColor(rarity) },
-                      filterRarity === rarity && styles.activeFilter,
-                      filterRarity === rarity && { backgroundColor: getRarityColor(rarity) + '20' }
-                    ]}
-                    onPress={() => setFilterRarity(rarity)}
-                    testID={`filter-${rarity}`}
-                  >
-                    <Text 
-                      style={[
-                        styles.rarityFilterText, 
-                        { color: filterRarity === rarity ? '#424242' : getRarityColor(rarity) }
-                      ]}
-                    >
-                      {getRarityLabel(rarity)}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
           </View>
         </View>
       </Modal>
@@ -789,6 +812,10 @@ const styles = StyleSheet.create({
     color: '#424242',
     marginTop: 16,
   },
+  loadingText: {
+    marginTop: 10,
+    color: '#8D6E63',
+  },
   settingsButton: {
     position: 'absolute',
     top: 20,
@@ -876,5 +903,8 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#424242',
     marginLeft: 16,
+  },
+  postsList: {
+    gap: 12,
   },
 });

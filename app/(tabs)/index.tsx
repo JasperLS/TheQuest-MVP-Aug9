@@ -7,7 +7,8 @@ import { useAuth } from '@/context/AuthContext';
 import { getRarityColor, getRarityLabel } from '@/utils/rarityUtils';
 import * as Haptics from 'expo-haptics';
 import { toggleLike, getLikeCount, isPostLikedByUser } from '@/utils/likesUtils';
-import { getLatestPosts, FeedPost as DatabaseFeedPost, getAllPostsWithDuplicates } from '@/utils/postsUtils';
+import { getLatestPosts, FeedPost as DatabaseFeedPost, getAllPostsWithDuplicates, Post } from '@/utils/postsUtils';
+import PostCard from '@/components/PostCard';
 
 interface FeedPost {
   id: string;
@@ -58,15 +59,6 @@ export default function FeedScreen() {
           console.error('Error fetching posts:', postsError);
           return;
         }
-        
-        console.log('Feed: Setting posts in state:', posts.length, 'posts');
-        posts.forEach((post, index) => {
-          console.log(`Feed Post ${index + 1}:`, {
-            id: post.id,
-            image_url: post.image_url,
-            created_at: post.created_at
-          });
-        });
         
         setFeedPosts(posts);
         
@@ -159,8 +151,55 @@ export default function FeedScreen() {
   };
 
   const handlePostPress = (postId: string) => {
-    // For now, just show an alert since we don't have individual post screens yet
-    Alert.alert('Post Details', 'Individual post view coming soon!');
+    router.push(`/post/${postId}`);
+  };
+
+  const handleDeletePost = async (postId: string) => {
+    if (!authUser?.id) {
+      Alert.alert('Error', 'You must be logged in to delete posts');
+      return;
+    }
+
+    Alert.alert(
+      "Delete Post",
+      "Are you sure you want to delete this post? This action cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Delete", 
+          onPress: async () => {
+            try {
+              // Import deletePost function
+              const { deletePost } = await import('@/utils/postsUtils');
+              const result = await deletePost(postId, authUser.id);
+              
+              if (result.success) {
+                // Remove from local state
+                setFeedPosts(prev => prev.filter(post => post.id !== postId));
+                // Remove from likes state
+                setPostLikes(prev => {
+                  const newState = { ...prev };
+                  delete newState[postId];
+                  return newState;
+                });
+                
+                if (Platform.OS !== 'web') {
+                  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                }
+                
+                Alert.alert('Success', 'Post deleted successfully!');
+              } else {
+                Alert.alert('Error', result.error || 'Failed to delete post');
+              }
+            } catch (error) {
+              console.error('Error deleting post:', error);
+              Alert.alert('Error', 'Failed to delete post. Please try again.');
+            }
+          }, 
+          style: "destructive" 
+        }
+      ]
+    );
   };
 
   const onRefresh = async () => {
@@ -217,6 +256,27 @@ export default function FeedScreen() {
     const likeCount = postLikes[item.id]?.count || 0;
     const timeAgo = getTimeAgo(item.created_at);
 
+    // Convert DatabaseFeedPost to Post format for PostCard
+    const postForCard: Post = {
+      id: item.id,
+      user_id: item.user_id,
+      animal_id: item.animal_id,
+      image_url: item.image_url,
+      location: item.location,
+      quality: item.quality,
+      caption: item.caption,
+      created_at: item.created_at,
+      animal: item.animal ? {
+        id: item.animal.id,
+        species: item.animal.scientificName, // Use scientific name as species
+        common_names: item.animal.name ? [item.animal.name] : [], // Use name as first common name
+        kingdom: item.animal.kingdom,
+        class: item.animal.class,
+        fun_facts: item.animal.fun_facts,
+        rarity_level: item.animal.rarity_level,
+      } : null,
+    };
+
     return (
       <View style={styles.postContainer}>
         <View style={styles.postHeader}>
@@ -227,17 +287,13 @@ export default function FeedScreen() {
           </View>
         </View>
 
-        <TouchableOpacity 
+        <PostCard
+          post={postForCard}
           onPress={() => handlePostPress(item.id)}
-          activeOpacity={0.95}
-        >
-          <Image source={{ uri: item.image_url }} style={styles.postImage} />
-          {item.animal && (
-            <View style={[styles.rarityBadge, { backgroundColor: getRarityColor(item.animal.rarity) }]}>
-              <Text style={styles.rarityText}>{getRarityLabel(item.animal.rarity)}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
+          onDelete={() => handleDeletePost(item.id)}
+          showDeleteButton={authUser?.id === item.user_id}
+          variant="compact"
+        />
 
         <View style={styles.postActions}>
           <TouchableOpacity 
@@ -266,12 +322,6 @@ export default function FeedScreen() {
         </View>
 
         <View style={styles.postContent}>
-          {item.animal && (
-            <>
-              <Text style={styles.animalName}>{item.animal.name}</Text>
-              <Text style={styles.scientificName}>{item.animal.scientificName}</Text>
-            </>
-          )}
           {item.caption && (
             <Text style={styles.caption}>
               <Text style={styles.captionUser}>{item.user.name}</Text> {item.caption}
@@ -338,16 +388,11 @@ const styles = StyleSheet.create({
   userInfo: { flex: 1 },
   userName: { fontSize: 16, fontWeight: 'bold', color: '#424242', marginBottom: 2 },
   postTime: { fontSize: 12, color: '#8D6E63' },
-  postImage: { width: '100%', height: 300, backgroundColor: '#eee' },
-  rarityBadge: { position: 'absolute', top: 12, right: 12, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12 },
-  rarityText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
   postActions: { flexDirection: 'row', padding: 16, paddingTop: 12, paddingBottom: 8 },
   actionButton: { flexDirection: 'row', alignItems: 'center', marginRight: 24 },
   actionText: { marginLeft: 6, fontSize: 14, color: '#8D6E63' },
   likedText: { color: '#F44336', fontWeight: 'bold' },
   postContent: { padding: 16, paddingTop: 0 },
-  animalName: { fontSize: 18, fontWeight: 'bold', color: '#424242', marginBottom: 2 },
-  scientificName: { fontSize: 14, color: '#8D6E63', fontStyle: 'italic', marginBottom: 8 },
   caption: { fontSize: 14, color: '#424242', lineHeight: 20 },
   captionUser: { fontWeight: 'bold' },
 });

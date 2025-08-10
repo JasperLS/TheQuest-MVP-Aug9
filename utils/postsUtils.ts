@@ -19,6 +19,15 @@ export interface Post {
   quality: number;
   caption: string | null;
   created_at: string;
+  animal?: {
+    id: string;
+    species: string;
+    common_names: string[];
+    kingdom: string | null;
+    class: string | null;
+    fun_facts: string | null;
+    rarity_level: number;
+  } | null;
 }
 
 export interface DiscoveryPostMapping {
@@ -41,10 +50,31 @@ export interface FeedPost {
     avatar: string;
   };
   animal: {
+    id: string;
     name: string;
     scientificName: string;
     rarity: string;
+    kingdom: string | null;
+    class: string | null;
+    fun_facts: string | null;
+    rarity_level: number;
   } | null;
+}
+
+export interface DetailedPost extends Post {
+  animal: {
+    id: string;
+    species: string;
+    common_names: string[];
+    kingdom: string | null;
+    class: string | null;
+    fun_facts: string | null;
+    rarity_level: number;
+  } | null;
+  user: {
+    name: string;
+    avatar: string;
+  };
 }
 
 /**
@@ -169,7 +199,16 @@ export async function getLatestPosts(): Promise<{ posts: FeedPost[]; error?: str
       .from('posts')
       .select(`
         *,
-        user:profiles!posts_user_id_fkey(display_name, profile_image_url)
+        user:profiles!posts_user_id_fkey(display_name, profile_image_url),
+        animal:animals!posts_animal_id_fkey(
+          id,
+          species,
+          common_names,
+          kingdom,
+          class,
+          fun_facts,
+          rarity_level
+        )
       `)
       .order('created_at', { ascending: false })
       .limit(4);
@@ -186,7 +225,8 @@ export async function getLatestPosts(): Promise<{ posts: FeedPost[]; error?: str
           id: post.id,
           user_id: post.user_id,
           image_url: post.image_url,
-          created_at: post.created_at
+          created_at: post.created_at,
+          animal_id: post.animal_id
         });
       });
     }
@@ -198,7 +238,16 @@ export async function getLatestPosts(): Promise<{ posts: FeedPost[]; error?: str
         name: post.user?.display_name || 'Unknown User',
         avatar: post.user?.profile_image_url || 'https://images.unsplash.com/photo-1535083783855-76ae62b2914e?q=80&w=200&auto=format&fit=crop',
       },
-      animal: null, // Temporarily disable animal data until we fix the join issue
+      animal: post.animal ? {
+        id: post.animal.id,
+        name: post.animal.common_names?.[0] || post.animal.species || 'Unknown Species',
+        scientificName: post.animal.species || 'Unknown',
+        rarity: getRarityFromLevel(post.animal.rarity_level),
+        kingdom: post.animal.kingdom,
+        class: post.animal.class,
+        fun_facts: post.animal.fun_facts,
+        rarity_level: post.animal.rarity_level,
+      } : null,
     }));
 
     console.log('getLatestPosts: Returning', transformedPosts.length, 'transformed posts');
@@ -219,7 +268,18 @@ export async function getUserPosts(userId: string): Promise<{ posts: Post[]; err
   try {
     const { data, error } = await supabase
       .from('posts')
-      .select('*')
+      .select(`
+        *,
+        animal:animals!posts_animal_id_fkey(
+          id,
+          species,
+          common_names,
+          kingdom,
+          class,
+          fun_facts,
+          rarity_level
+        )
+      `)
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
@@ -239,13 +299,28 @@ export async function getUserPosts(userId: string): Promise<{ posts: Post[]; err
 }
 
 /**
- * Fetch a specific post by ID
+ * Fetch a specific post by ID with detailed animal and user information
  */
-export async function getPostById(postId: string): Promise<{ post: Post | null; error?: string }> {
+export async function getPostById(postId: string): Promise<{ post: DetailedPost | null; error?: string }> {
   try {
     const { data, error } = await supabase
       .from('posts')
-      .select('*')
+      .select(`
+        *,
+        animal:animals!posts_animal_id_fkey(
+          id,
+          species,
+          common_names,
+          kingdom,
+          class,
+          fun_facts,
+          rarity_level
+        ),
+        user:profiles!posts_user_id_fkey(
+          display_name,
+          profile_image_url
+        )
+      `)
       .eq('id', postId)
       .single();
 
@@ -254,7 +329,25 @@ export async function getPostById(postId: string): Promise<{ post: Post | null; 
       return { post: null, error: error.message };
     }
 
-    return { post: data };
+    // Transform the data to match our DetailedPost interface
+    const detailedPost: DetailedPost = {
+      ...data,
+      animal: data.animal ? {
+        id: data.animal.id,
+        species: data.animal.species,
+        common_names: data.animal.common_names || [],
+        kingdom: data.animal.kingdom,
+        class: data.animal.class,
+        fun_facts: data.animal.fun_facts,
+        rarity_level: data.animal.rarity_level,
+      } : null,
+      user: {
+        name: data.user?.display_name || 'Unknown User',
+        avatar: data.user?.profile_image_url || 'https://images.unsplash.com/photo-1535083783855-76ae62b2914e?q=80&w=200&auto=format&fit=crop',
+      },
+    };
+
+    return { post: detailedPost };
   } catch (error) {
     console.error('Error in getPostById:', error);
     return {
@@ -398,6 +491,52 @@ export async function getAllPostsWithDuplicates(): Promise<{ posts: Post[]; dupl
     return {
       posts: [],
       duplicates: [],
+      error: error instanceof Error ? error.message : 'Unknown error occurred'
+    };
+  }
+}
+
+/**
+ * Delete a post by ID
+ */
+export async function deletePost(postId: string, userId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    // First verify the post belongs to the user
+    const { data: post, error: fetchError } = await supabase
+      .from('posts')
+      .select('user_id')
+      .eq('id', postId)
+      .single();
+
+    if (fetchError) {
+      console.error('Error fetching post for deletion:', fetchError);
+      return { success: false, error: fetchError.message };
+    }
+
+    if (!post) {
+      return { success: false, error: 'Post not found' };
+    }
+
+    if (post.user_id !== userId) {
+      return { success: false, error: 'Unauthorized to delete this post' };
+    }
+
+    // Delete the post
+    const { error: deleteError } = await supabase
+      .from('posts')
+      .delete()
+      .eq('id', postId);
+
+    if (deleteError) {
+      console.error('Error deleting post:', deleteError);
+      return { success: false, error: deleteError.message };
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error('Error in deletePost:', error);
+    return {
+      success: false,
       error: error instanceof Error ? error.message : 'Unknown error occurred'
     };
   }
