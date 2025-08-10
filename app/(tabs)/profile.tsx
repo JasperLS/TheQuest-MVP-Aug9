@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, Text, Image, TouchableOpacity, ScrollView, Alert, Platform, TextInput, FlatList, Modal } from 'react-native';
+import { StyleSheet, View, Text, Image, TouchableOpacity, ScrollView, Alert, Platform, TextInput, FlatList, Modal, ActivityIndicator } from 'react-native';
 import { useAppContext } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { Camera, Edit2, LogOut, Medal, Settings, Share2, Search, Filter, MoreHorizontal, MessageSquare, Info, X } from 'lucide-react-native';
@@ -8,6 +8,7 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { getRarityColor, getRarityLabel } from '@/utils/rarityUtils';
+import { uploadProfileImage } from '@/utils/profileImageUtils';
 
 export default function ProfileScreen() {
   const { user, updateUserProfile, resetAppData, discoveries, syncUserProfileWithSupabase } = useAppContext();
@@ -46,18 +47,55 @@ export default function ProfileScreen() {
   }, [user.name]);
 
   const handleProfilePictureChange = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 1,
-    });
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+        base64: true, // Include base64 for web compatibility
+      });
 
-    if (!result.canceled && result.assets && result.assets.length > 0) {
-      updateUserProfile({ profilePicture: result.assets[0].uri });
-      if (Platform.OS !== 'web') {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        
+        // Show loading state
+        setIsUpdating(true);
+        
+        try {
+          // Upload image to Supabase storage
+          const uploadResult = await uploadProfileImage(
+            authUser?.id || user.id, 
+            asset.uri, 
+            asset.base64 || undefined
+          );
+          
+          if (uploadResult.success && uploadResult.imageUrl) {
+            // Add cache-busting timestamp to ensure new image is displayed
+            const cacheBustedUrl = `${uploadResult.imageUrl}?t=${Date.now()}`;
+            
+            // Update local state and database
+            await updateUserProfile({ profilePicture: cacheBustedUrl });
+            
+            if (Platform.OS !== 'web') {
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            }
+            
+            Alert.alert('Success', 'Profile picture updated successfully!');
+          } else {
+            throw new Error(uploadResult.error || 'Failed to upload image');
+          }
+        } catch (error) {
+          console.error('Error updating profile picture:', error);
+          Alert.alert('Error', 'Failed to update profile picture. Please try again.');
+        } finally {
+          setIsUpdating(false);
+        }
       }
+    } catch (error) {
+      console.error('Error picking image:', error);
+      Alert.alert('Error', 'Failed to pick image. Please try again.');
+      setIsUpdating(false);
     }
   };
 
@@ -183,8 +221,13 @@ export default function ProfileScreen() {
             style={styles.editImageButton}
             onPress={handleProfilePictureChange}
             testID="edit-profile-picture"
+            disabled={isUpdating}
           >
-            <Camera color="#fff" size={16} />
+            {isUpdating ? (
+              <ActivityIndicator color="#fff" size={16} />
+            ) : (
+              <Camera color="#fff" size={16} />
+            )}
           </TouchableOpacity>
         </View>
         

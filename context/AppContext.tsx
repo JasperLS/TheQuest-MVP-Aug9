@@ -5,7 +5,7 @@ import { generateAnimalData } from '@/utils/animalGenerator';
 import { Animal, Discovery, Achievement, User, Badge } from '@/types/app';
 import { Platform } from 'react-native';
 import { supabase } from '@/lib/supabase';
-import { getUserProfile, updateProfile } from '@/utils/profileUtils';
+import { getUserProfile, updateProfile, updateProfileImageUrl } from '@/utils/profileUtils';
 
 // Result returned by Supabase Edge Function identify-species
 export type EdgeIdentificationResult = {
@@ -509,13 +509,14 @@ export const [AppContext, useAppContext] = createContextHook(() => {
   const syncUserProfileWithSupabase = async (userId: string) => {
     try {
       const profile = await getUserProfile(userId);
-      if (profile && profile.display_name) {
+      if (profile) { // Check for profile existence
         setUser(prev => ({
           ...prev,
-          name: profile.display_name || prev.name,
-          username: profile.username || prev.username,
-          points: profile.points || prev.points,
+          name: profile.display_name || prev.name, // Use prev.name as fallback
+          username: profile.username || prev.username, // Use prev.username as fallback
+          points: profile.points || prev.points, // Use prev.points as fallback
           bio: profile.bio || prev.bio,
+          profilePicture: profile.profile_image_url || prev.profilePicture, // Sync profile image
         }));
       }
     } catch (error) {
@@ -542,6 +543,20 @@ export const [AppContext, useAppContext] = createContextHook(() => {
         }
       } catch (error) {
         console.error('Error updating profile in Supabase:', error);
+      }
+    }
+
+    // If we have a user ID and are updating the profile picture, sync with Supabase
+    if (updates.profilePicture && user.id !== 'user-1') {
+      try {
+        const result = await updateProfileImageUrl(user.id, updates.profilePicture);
+        if (!result.success) {
+          console.error('Failed to update profile image URL in Supabase:', result.error);
+          // Optionally revert local state if Supabase update fails
+          // setUser(prev => ({ ...prev, profilePicture: prev.profilePicture }));
+        }
+      } catch (error) {
+        console.error('Error updating profile image URL in Supabase:', error);
       }
     }
   };

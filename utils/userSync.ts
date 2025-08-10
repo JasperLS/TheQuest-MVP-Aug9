@@ -3,23 +3,23 @@ import { supabase } from '@/lib/supabase';
 /**
  * Get the current authenticated user's ID
  */
-export function getCurrentUserId(): string | null {
-  const { data: { user } } = supabase.auth.getUser();
+export async function getCurrentUserId(): Promise<string | null> {
+  const { data: { user } } = await supabase.auth.getUser();
   return user?.id || null;
 }
 
 /**
  * Check if the current user is authenticated
  */
-export function isAuthenticated(): boolean {
-  const { data: { user } } = supabase.auth.getUser();
+export async function isAuthenticated(): Promise<boolean> {
+  const { data: { user } } = await supabase.auth.getUser();
   return !!user;
 }
 
 /**
  * Get the current user's email
  */
-export function getCurrentUserEmail(): string | null {
-  const { data: { user } } = supabase.auth.getUser();
-  return user?.email || null;
+export async function getCurrentUserEmail(): Promise<string | null> {
+  const { data: { user } } = await supabase.auth.getUser();
+  return Promise.resolve(user?.email || null);
 }

@@ -1,0 +1,8 @@
+$ bunx rork start -p njv4ydy7y1vddba83udfe --tunnel
+Starting project at /Users/jasper/TheQuest-MVP-Aug9
+Starting Metro Bundler
+Tunnel connected.
+Tunnel ready.
+Error: EACCES: permission denied, open '/Users/jasper/.expo/versions-cache/7df014630a08d03625d313fc74d136dbdf52e772941a093b22c9d3977ba45811-body.bin'
+Error: EACCES: permission denied, open '/Users/jasper/.expo/versions-cache/7df014630a08d03625d313fc74d136dbdf52e772941a093b22c9d3977ba45811-body.bin'
+error: script "start" exited with code 1

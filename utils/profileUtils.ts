@@ -137,3 +137,34 @@ export async function updateProfile(userId: string, updates: Partial<Profile>): 
     return { success: false, error: 'Unknown error occurred' };
   }
 }
+
+/**
+ * Updates the profile image URL in the database
+ * @param userId - The user's ID
+ * @param imageUrl - The new profile image URL
+ * @returns Object with success status and error if any
+ */
+export async function updateProfileImageUrl(
+  userId: string, 
+  imageUrl: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error } = await supabase
+      .from('profiles')
+      .update({ profile_image_url: imageUrl })
+      .eq('id', userId);
+
+    if (error) {
+      console.error('Error updating profile image URL:', error);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error('Error in updateProfileImageUrl:', error);
+    return { 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Unknown error occurred' 
+    };
+  }
+}

@@ -52,7 +52,11 @@ export default function CameraScreen() {
     });
 
     if (!result.canceled && result.assets && result.assets.length > 0) {
-      await processImage(result.assets[0]);
+      const asset = result.assets[0];
+      await processImage({
+        uri: asset.uri,
+        base64: asset.base64 || undefined
+      });
     }
   };
 
