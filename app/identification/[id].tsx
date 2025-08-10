@@ -1,23 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { StyleSheet, View, Text, Image, ScrollView, TouchableOpacity, Animated, Platform, Alert, TextInput } from 'react-native';
+import { StyleSheet, View, Text, Image, ScrollView, TouchableOpacity, Animated, Platform, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useAppContext } from '@/context/AppContext';
-import { Camera, Heart, Info, MapPin, Save, Clock, MessageCircle, Send } from 'lucide-react-native';
+import { Camera, Heart, Info, MapPin, Save, Clock } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { getRarityColor, getRarityLabel } from '@/utils/rarityUtils';
 import { toggleLike, getLikeCount, isPostLikedByUser } from '@/utils/likesUtils';
 
-interface Comment {
-  id: string;
-  user: {
-    name: string;
-    avatar: string;
-  };
-  text: string;
-  timestamp: string;
-  likes: number;
-}
+
 
 // Helper function to check if a string is a valid UUID
 function isValidUUID(str: string): boolean {
@@ -33,39 +24,6 @@ export default function IdentificationScreen() {
   const [isSaved, setIsSaved] = useState(false);
   const [isLiked, setIsLiked] = useState(false);
   const [likes, setLikes] = useState(0);
-  const [newComment, setNewComment] = useState('');
-  const [comments, setComments] = useState<Comment[]>([
-    {
-      id: '1',
-      user: {
-        name: 'Sarah Chen',
-        avatar: 'https://images.unsplash.com/photo-1494790108755-2616b612b786?q=80&w=200&auto=format&fit=crop'
-      },
-      text: 'Amazing shot! The detail is incredible 📸',
-      timestamp: '2h',
-      likes: 3
-    },
-    {
-      id: '2',
-      user: {
-        name: 'Mike Johnson',
-        avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?q=80&w=200&auto=format&fit=crop'
-      },
-      text: 'I saw one of these last week! Such beautiful creatures 🦅',
-      timestamp: '4h',
-      likes: 7
-    },
-    {
-      id: '3',
-      user: {
-        name: 'Emma Wilson',
-        avatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?q=80&w=200&auto=format&fit=crop'
-      },
-      text: 'Great find! This species is getting rarer to spot',
-      timestamp: '6h',
-      likes: 12
-    }
-  ]);
   
   const scaleAnim = useRef(new Animated.Value(0.9)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
@@ -202,26 +160,6 @@ export default function IdentificationScreen() {
       Alert.alert('Error', 'Failed to update like. Please try again.');
     }
   };
-
-  const handleAddComment = () => {
-    if (newComment.trim()) {
-      const comment: Comment = {
-        id: Date.now().toString(),
-        user: {
-          name: user.name,
-          avatar: user.profilePicture || 'https://images.unsplash.com/photo-1535083783855-76ae62b2914e?q=80&w=200&auto=format&fit=crop'
-        },
-        text: newComment.trim(),
-        timestamp: 'now',
-        likes: 0
-      };
-      setComments(prev => [comment, ...prev]);
-      setNewComment('');
-      if (Platform.OS !== 'web') {
-        Haptics.selectionAsync();
-      }
-    }
-  };
   
   return (
     <ScrollView style={styles.container}>
@@ -323,8 +261,7 @@ export default function IdentificationScreen() {
           </TouchableOpacity>
           
           <TouchableOpacity style={styles.socialButton}>
-            <MessageCircle color="#8D6E63" size={24} />
-            <Text style={styles.socialText}>{comments.length}</Text>
+            <Text style={styles.socialText}>0</Text>
           </TouchableOpacity>
           
           {source === 'camera' && (
@@ -340,56 +277,6 @@ export default function IdentificationScreen() {
             </TouchableOpacity>
           )}
         </View>
-        
-        <View style={styles.commentsSection}>
-          <Text style={styles.sectionTitle}>Comments</Text>
-          
-          <View style={styles.commentInput}>
-            <Image 
-              source={{ uri: user.profilePicture || 'https://images.unsplash.com/photo-1535083783855-76ae62b2914e?q=80&w=200&auto=format&fit=crop' }} 
-              style={styles.commentAvatar} 
-            />
-            <TextInput
-              style={styles.textInput}
-              placeholder="Add a comment..."
-              value={newComment}
-              onChangeText={setNewComment}
-              multiline
-              maxLength={200}
-            />
-            <TouchableOpacity 
-              style={styles.sendButton}
-              onPress={handleAddComment}
-              disabled={!newComment.trim()}
-            >
-              <Send 
-                color={newComment.trim() ? '#2E7D32' : '#ccc'} 
-                size={20} 
-              />
-            </TouchableOpacity>
-          </View>
-          
-          <View style={styles.commentsList}>
-            {comments.map((comment) => (
-              <View key={comment.id} style={styles.commentItem}>
-                <Image source={{ uri: comment.user.avatar }} style={styles.commentAvatar} />
-                <View style={styles.commentContent}>
-                  <View style={styles.commentHeader}>
-                    <Text style={styles.commentUser}>{comment.user.name}</Text>
-                    <Text style={styles.commentTime}>{comment.timestamp}</Text>
-                  </View>
-                  <Text style={styles.commentText}>{comment.text}</Text>
-                  <TouchableOpacity style={styles.commentLike}>
-                    <Heart color="#8D6E63" size={14} />
-                    <Text style={styles.commentLikeText}>{comment.likes}</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))}
-          </View>
-        </View>
-        
-
         
         <TouchableOpacity 
           style={styles.cameraButton}
