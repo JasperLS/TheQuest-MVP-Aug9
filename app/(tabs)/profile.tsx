@@ -1,8 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { StyleSheet, View, Text, Image, TouchableOpacity, ScrollView, Alert, Platform, TextInput, FlatList, Modal } from 'react-native';
 import { useAppContext } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
-import { supabase } from '@/lib/supabase';
 import { Camera, Edit2, LogOut, Medal, Settings, Share2, Search, Filter, MoreHorizontal, MessageSquare, Info, X } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
@@ -11,16 +10,40 @@ import { useRouter } from 'expo-router';
 import { getRarityColor, getRarityLabel } from '@/utils/rarityUtils';
 
 export default function ProfileScreen() {
-  const { user, updateUserProfile, resetAppData, discoveries } = useAppContext();
-  const { signOut, user: authUser } = useAuth();
+  const { user, updateUserProfile, resetAppData, discoveries, syncUserProfileWithSupabase } = useAppContext();
+  const { user: authUser, signOut } = useAuth();
   const router = useRouter();
   const [isEditing, setIsEditing] = useState(false);
   const [editedName, setEditedName] = useState(user.name);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [hasSynced, setHasSynced] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterRarity, setFilterRarity] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'animals' | 'plants' | 'others'>('animals');
   const [showSettings, setShowSettings] = useState(false);
   const [showFilterModal, setShowFilterModal] = useState(false);
+
+  // Sync profile with Supabase when component mounts
+  useEffect(() => {
+    if (authUser?.id && !hasSynced) {
+      console.log('ProfileScreen: Syncing profile with Supabase for user:', authUser.id);
+      
+      // Update the user ID in AppContext to match the authenticated user
+      if (user.id === 'user-1' && authUser.id !== 'user-1') {
+        console.log('ProfileScreen: Updating user ID from', user.id, 'to', authUser.id);
+        updateUserProfile({ id: authUser.id });
+      }
+      
+      // Sync the profile from Supabase
+      syncUserProfileWithSupabase(authUser.id);
+      setHasSynced(true);
+    }
+  }, [authUser?.id, hasSynced]); // Only sync once per auth user
+
+  // Update edited name when user name changes
+  useEffect(() => {
+    setEditedName(user.name);
+  }, [user.name]);
 
   const handleProfilePictureChange = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -39,32 +62,26 @@ export default function ProfileScreen() {
   };
 
   const handleSaveProfile = async () => {
-    const newName = editedName.trim();
-    if (!newName) {
-      return Alert.alert('Invalid name', 'Please enter a valid display name.');
+    if (!editedName.trim()) {
+      Alert.alert('Error', 'Please enter a valid name');
+      return;
     }
 
+    setIsUpdating(true);
     try {
-      if (!authUser?.id) {
-        throw new Error('Not authenticated');
-      }
-
-      const { error } = await supabase
-        .from('profiles')
-        .update({ display_name: newName })
-        .eq('id', authUser.id);
-
-      if (error) throw error;
-
-      // Keep local UI in sync
-      updateUserProfile({ name: newName });
+      await updateUserProfile({ name: editedName.trim() });
       setIsEditing(false);
+      
       if (Platform.OS !== 'web') {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
-    } catch (err: any) {
-      console.error('Failed to update display name:', err);
-      Alert.alert('Error', err?.message || 'Failed to update your name.');
+      
+      Alert.alert('Success', 'Display name updated successfully!');
+    } catch (error) {
+      console.error('Error updating display name:', error);
+      Alert.alert('Error', 'Failed to update display name');
+    } finally {
+      setIsUpdating(false);
     }
   };
 
@@ -182,11 +199,14 @@ export default function ProfileScreen() {
               testID="name-input"
             />
             <TouchableOpacity 
-              style={styles.saveButton}
+              style={[styles.saveButton, isUpdating && styles.saveButtonDisabled]}
               onPress={handleSaveProfile}
+              disabled={isUpdating}
               testID="save-profile"
             >
-              <Text style={styles.saveButtonText}>Save</Text>
+              <Text style={styles.saveButtonText}>
+                {isUpdating ? 'Saving...' : 'Save'}
+              </Text>
             </TouchableOpacity>
           </View>
         ) : (
@@ -516,6 +536,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 16,
+  },
+  saveButtonDisabled: {
+    backgroundColor: '#E0E0E0',
+    opacity: 0.6,
   },
   saveButtonText: {
     color: '#2E7D32',

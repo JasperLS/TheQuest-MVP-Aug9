@@ -4,6 +4,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { generateAnimalData } from '@/utils/animalGenerator';
 import { Animal, Discovery, Achievement, User, Badge } from '@/types/app';
 import { Platform } from 'react-native';
+import { supabase } from '@/lib/supabase';
+import { getUserProfile, updateProfile } from '@/utils/profileUtils';
 
 // Result returned by Supabase Edge Function identify-species
 export type EdgeIdentificationResult = {
@@ -181,7 +183,13 @@ export const [AppContext, useAppContext] = createContextHook(() => {
           setAchievements(JSON.parse(storedAchievements));
         }
         if (storedUser) {
-          setUser(JSON.parse(storedUser));
+          const parsedUser = JSON.parse(storedUser);
+          setUser(parsedUser);
+          
+          // If this is a real user (not the default), sync with Supabase
+          if (parsedUser.id !== 'user-1') {
+            syncUserProfileWithSupabase(parsedUser.id);
+          }
         }
       } catch (error) {
         console.error('Error loading data from AsyncStorage:', error);
@@ -497,12 +505,45 @@ export const [AppContext, useAppContext] = createContextHook(() => {
     });
   };
 
-  // Update user profile
-  const updateUserProfile = (updates: Partial<User>) => {
+  // Sync user profile with Supabase
+  const syncUserProfileWithSupabase = async (userId: string) => {
+    try {
+      const profile = await getUserProfile(userId);
+      if (profile && profile.display_name) {
+        setUser(prev => ({
+          ...prev,
+          name: profile.display_name || prev.name,
+          username: profile.username || prev.username,
+          points: profile.points || prev.points,
+          bio: profile.bio || prev.bio,
+        }));
+      }
+    } catch (error) {
+      console.error('Error syncing profile with Supabase:', error);
+    }
+  };
+
+  // Update user profile (both local and Supabase)
+  const updateUserProfile = async (updates: Partial<User>) => {
+    // Update local state immediately
     setUser(prev => ({
       ...prev,
       ...updates,
     }));
+
+    // If we have a user ID and are updating the name, sync with Supabase
+    if (updates.name && user.id !== 'user-1') {
+      try {
+        const result = await updateProfile(user.id, { display_name: updates.name });
+        if (!result.success) {
+          console.error('Failed to update profile in Supabase:', result.error);
+          // Optionally revert local state if Supabase update fails
+          // setUser(prev => ({ ...prev, name: prev.name }));
+        }
+      } catch (error) {
+        console.error('Error updating profile in Supabase:', error);
+      }
+    }
   };
 
   // Follow/unfollow user
@@ -537,6 +578,7 @@ export const [AppContext, useAppContext] = createContextHook(() => {
     addToFavorites,
     claimAchievementReward,
     updateUserProfile,
+    syncUserProfileWithSupabase,
     toggleFollowUser,
     resetAppData,
   };
