@@ -26,6 +26,12 @@ function RootLayoutNav() {
         }} 
       />
       <Stack.Screen 
+        name="post/[id]" 
+        options={{ 
+          headerShown: false,
+        }} 
+      />
+      <Stack.Screen 
         name="login" 
         options={{ 
           headerShown: false,
